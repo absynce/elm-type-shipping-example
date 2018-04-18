@@ -24,9 +24,12 @@ main =
 type alias Model =
     { deliveryBy : String
     , deliveryOn : Time
+    , recipientName : String
     , recipientLocation : RecipientLocation
     , currentStatus : Status
     , currentLocation : Location
+
+    -- Added in order to track selected edit status. Could separate model for shipping order from this form field.
     , editStatus : Status
     }
 
@@ -53,8 +56,8 @@ type alias ReasonCode =
 
 type Status
     = Processing
-    | InTransitToClient Organization
-    | Delivered
+    | InTransitToRecipient
+    | DeliveredToRecipient
     | InTransitReturn Reason
     | Faulty Reason ReasonCode
 
@@ -62,6 +65,7 @@ type Status
 type StatusValidation
     = Valid
       -- | InvalidToState
+    | InTransitReturnReasonNotSpecified
     | FaultyReasonNotSpecified
     | FaultyReasonCodeNotSpecified
     | FaultyReasonAndReasonCodeNotSpecified
@@ -73,20 +77,29 @@ validateStatus status =
         Processing ->
             Valid
 
-        InTransitToClient organization ->
+        InTransitToRecipient ->
             -- validateInTransitToClientStatus organization
             Valid
 
-        Delivered ->
+        DeliveredToRecipient ->
+            -- TODO: Add location/delivered by.
             Valid
 
-        -- TODO: Add location.
         InTransitReturn reason ->
-            -- validateInTransitReturnStatus reason
-            Valid
+            validateInTransitReturnStatus reason
 
         Faulty reason reasonCode ->
             validateFaultyStatus reason reasonCode
+
+
+validateInTransitReturnStatus : Reason -> StatusValidation
+validateInTransitReturnStatus reason =
+    case reason of
+        "" ->
+            InTransitReturnReasonNotSpecified
+
+        otherReasons ->
+            Valid
 
 
 validateFaultyStatus : Reason -> ReasonCode -> StatusValidation
@@ -123,9 +136,10 @@ init : ( Model, Cmd Msg )
 init =
     ( { deliveryBy = ""
       , deliveryOn = 0
-      , recipientLocation = ""
+      , recipientName = "Harry Potter"
+      , recipientLocation = "4 Privet Drive"
       , currentStatus = Processing
-      , currentLocation = "IWT"
+      , currentLocation = "Hogwarts warehouse"
       , editStatus = Processing
       }
     , Cmd.none
@@ -138,7 +152,7 @@ init =
 
 view : Model -> Html Msg
 view model =
-    div []
+    viewAppContainer []
         [ dl []
             [ dt [] [ text "Delivery on" ]
             , dd []
@@ -153,8 +167,25 @@ view model =
                 [ text
                     (model.currentStatus |> viewStatusText model)
                 ]
+            , dt [] [ text "Current location" ]
+            , dd [] [ text model.currentLocation ]
             ]
         , viewEditStatusForm model
+        ]
+
+
+viewAppContainer : List (Attribute msg) -> List (Html msg) -> Html msg
+viewAppContainer attributes children =
+    div attributes
+        [ div [ class "container" ]
+            [ div [ class "row main align-items-center justify-content-md-center" ]
+                [ div [ class "col-md-auto" ]
+                    [ div [ class "card" ]
+                        [ div [ class "card-body" ] children
+                        ]
+                    ]
+                ]
+            ]
         ]
 
 
@@ -166,7 +197,9 @@ viewEditStatusForm model =
             [ text "Set status"
             , viewStatusOptions model
             ]
-        , viewEditStatusFormAdditionalInputs model
+        , div []
+            [ viewEditStatusFormAdditionalInputs model
+            ]
         , dl []
             [ dt [] [ text "New status" ]
             , dd []
@@ -175,7 +208,9 @@ viewEditStatusForm model =
                 ]
             ]
         , button
-            [ disabled <| not (statusIsValid model.editStatus)
+            [ class "btn btn-primary"
+            , disabled <| not (statusIsValid model.editStatus)
+            , onClick UpdateCurrentStatusToEditStatus
             ]
             [ text "Update status" ]
         ]
@@ -187,25 +222,32 @@ viewEditStatusFormAdditionalInputs model =
         Processing ->
             text ""
 
-        InTransitToClient organization ->
-            div []
-                [ input
-                    [ type_ "text"
-                    , value organization
-                    ]
-                    []
-                ]
+        InTransitToRecipient ->
+            text ""
 
-        Delivered ->
+        DeliveredToRecipient ->
             text ""
 
         InTransitReturn reason ->
-            Debug.crash "TODO: Add InTransitReturn reason check"
+            label []
+                [ text "Reason"
+
+                -- TODO: Replace br with form-group.
+                , br [] []
+                , input
+                    [ type_ "text"
+                    , value reason
+                    , placeholder "my dog chewed it up"
+                    , onInput (\reasonInput -> UpdateEditStatus (InTransitReturn reasonInput))
+                    ]
+                    []
+                ]
 
         Faulty reason reasonCode ->
             div []
                 [ label []
                     [ text "Reason"
+                    , br [] []
                     , input
                         [ type_ "text"
                         , value reason
@@ -216,6 +258,7 @@ viewEditStatusFormAdditionalInputs model =
                     ]
                 , label []
                     [ text "Reason code"
+                    , br [] []
                     , input
                         [ type_ "number"
                         , value (toString reasonCode)
@@ -232,14 +275,14 @@ viewStatusText model status =
         Processing ->
             "Processing"
 
-        InTransitToClient organization ->
-            "In transit to " ++ organization
+        InTransitToRecipient ->
+            "In transit to " ++ model.recipientName
 
-        Delivered ->
-            "Delivered to " ++ model.currentLocation
+        DeliveredToRecipient ->
+            "Delivered to " ++ model.recipientLocation
 
         InTransitReturn reason ->
-            "In transit to IWT cuz of " ++ reason
+            "In transit to shipper cuz of " ++ reason
 
         Faulty reason reasonCode ->
             "Faulty cuz of " ++ reason ++ " (code: " ++ toString reasonCode ++ ")"
@@ -255,32 +298,32 @@ viewStatusOptions model =
 editStatusOptions : Model -> List Status
 editStatusOptions model =
     [ Processing
-    , InTransitToClient ""
-    , Delivered
-    , InTransitReturn "[enter reason]"
+    , InTransitToRecipient
+    , DeliveredToRecipient
+    , InTransitReturn ""
     , Faulty "" 0
     ]
 
 
 statusOptionWithLabel : Status -> ( Status, String )
 statusOptionWithLabel statusOptionValue =
-    ( statusOptionValue, statusOptionToString statusOptionValue )
+    ( statusOptionValue, statusOptionToLabel statusOptionValue )
 
 
-statusOptionToString : Status -> String
-statusOptionToString status =
+statusOptionToLabel : Status -> String
+statusOptionToLabel status =
     case status of
         Processing ->
             "Processing"
 
-        InTransitToClient organization ->
-            "In transit to client"
+        InTransitToRecipient ->
+            "In transit to recipient"
 
-        Delivered ->
+        DeliveredToRecipient ->
             "Delivered"
 
         InTransitReturn reason ->
-            "In transit return " ++ reason
+            "In transit return"
 
         Faulty reason reasonCode ->
             "Faulty"
@@ -299,6 +342,7 @@ selectFromValuesWithLabels defaultValue callback valuesWithLabels =
 
         options valuesWithLabels defaultValue =
             List.map optionForTuple valuesWithLabels
+                |> Debug.log "options with labels"
 
         maybeValueFromLabel l =
             List.filter (\( value, label ) -> label == l) valuesWithLabels
@@ -322,8 +366,7 @@ selectFromValuesWithLabels defaultValue callback valuesWithLabels =
 
 
 type Msg
-    = NoOp
-    | UpdateCurrentStatus Status
+    = UpdateCurrentStatusToEditStatus
     | UpdateEditStatus Status
     | UpdateEditStatusFaultyReasonCode Reason String
 
@@ -331,11 +374,8 @@ type Msg
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        NoOp ->
-            ( model, Cmd.none )
-
-        UpdateCurrentStatus newCurrentStatus ->
-            { model | currentStatus = newCurrentStatus } ! []
+        UpdateCurrentStatusToEditStatus ->
+            updateCurrentStatus model.editStatus model ! []
 
         UpdateEditStatus newEditStatus ->
             { model | editStatus = newEditStatus } ! []
@@ -349,6 +389,34 @@ update msg model =
                     Faulty reason reasonCodeInputInt
             in
                 { model | editStatus = newEditStatus } ! []
+
+
+updateCurrentStatus : Status -> Model -> Model
+updateCurrentStatus newStatus model =
+    let
+        modelWithOtherFieldsUpdatedFromStatus =
+            setOtherFieldsFromStatusChange newStatus model
+    in
+        { modelWithOtherFieldsUpdatedFromStatus | currentStatus = newStatus }
+
+
+setOtherFieldsFromStatusChange : Status -> Model -> Model
+setOtherFieldsFromStatusChange newStatus model =
+    case newStatus of
+        Processing ->
+            { model | currentLocation = "Hogwarts warehouse" }
+
+        InTransitToRecipient ->
+            { model | currentLocation = "en route" }
+
+        DeliveredToRecipient ->
+            { model | currentLocation = model.recipientLocation }
+
+        InTransitReturn reason ->
+            { model | currentLocation = "en route" }
+
+        Faulty reason reasonCode ->
+            { model | currentLocation = "Hogwarts warehouse" }
 
 
 
